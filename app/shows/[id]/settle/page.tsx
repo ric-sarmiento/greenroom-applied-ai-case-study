@@ -5,7 +5,6 @@ import {
   FileWarning,
   ArrowRight,
   Check,
-  AlertTriangle,
   Mail,
   Pencil,
   XCircle,
@@ -23,10 +22,12 @@ import {
 } from "@/components/ui/card";
 import { StatusBadge, DealTypeBadge, PlainBadge } from "@/components/ui/badge";
 import { calculateSettlement } from "@/lib/dealMath";
+import { deriveHealth } from "@/lib/settlementHealth/derive";
 import {
   formatMoney,
   formatShowDateFull,
 } from "@/lib/format";
+import { SettlementHealthPanel } from "@/components/settlement-health/settlement-health-panel";
 import type { Settlement, Recoup } from "@/db/schema";
 import { Logomark } from "@/components/brand/logo";
 
@@ -68,33 +69,21 @@ export default async function SettlePage({
     expenses,
     venueCapacity: data.venue?.capacity ?? undefined,
   });
+  const health = deriveHealth({ settlement, recoups, calc });
   const grossSoFar = ticketSales.reduce((sum, t) => sum + t.gross, 0);
   const totalFees = ticketSales.reduce((sum, t) => sum + t.fees, 0);
   const totalExpenses = expenses
     .filter((e) => !e.absorbedByVenue)
     .reduce((sum, e) => sum + e.amount, 0);
 
-  const disputedRecoups = recoups.filter((r) => r.status === "disputed");
-  const isDisputed = settlement?.status === "disputed" || settlement?.status === "revised" || !!settlement?.disputedAt;
-  const disputedRecoupValue = disputedRecoups.reduce((s, r) => s + r.amount, 0);
-
   return (
-    <div className={`px-12 py-10 max-w-7xl ${isDisputed ? "bg-gradient-to-b from-rose-50/30 via-canvas to-canvas" : ""}`}>
+    <div className="px-12 py-10 max-w-7xl">
       <BackLink showId={show.id} />
 
-      <div className="mb-20">
+      <div className="mb-10">
         <div className="flex items-center gap-1.5 mb-4">
           <StatusBadge status={show.status} />
           <DealTypeBadge type={deal.dealType} />
-          {settlement?.status === "disputed" && (
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10.5px] font-medium ring-1 ring-inset bg-rose-50 text-rose-800 ring-rose-200/80">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-rose-500" />
-              </span>
-              Disputed
-            </span>
-          )}
           {settlement?.status === "voided" && (
             <PlainBadge variant="default">Voided</PlainBadge>
           )}
@@ -107,24 +96,9 @@ export default async function SettlePage({
         </div>
       </div>
 
-      {/* Disputed callout */}
-      {isDisputed && disputedRecoupValue > 0 && (
-        <div className="mb-8 rounded-lg border border-rose-200/60 bg-rose-50/40 p-5 flex gap-3">
-          <AlertTriangle className="h-4 w-4 text-rose-700 mt-0.5 shrink-0" />
-          <div>
-            <div className="text-[13px] font-semibold text-rose-800">
-              {disputedRecoups.length} recoup{disputedRecoups.length === 1 ? "" : "s"} in dispute · {formatMoney(disputedRecoupValue)} contested
-            </div>
-            <p className="text-[12.5px] text-ink-600 mt-1 leading-relaxed">
-              The artist team has flagged recoup line items. This settlement cannot be finalized until the dispute is resolved.
-            </p>
-          </div>
-        </div>
-      )}
+      <SettlementHealthPanel report={health} />
 
-      {settlement && (
-        <LifecycleBar settlement={settlement} disputedRecoups={disputedRecoups.length} />
-      )}
+      {settlement && <LifecycleBar settlement={settlement} />}
 
       <div className="space-y-6 mt-6">
         {!calc.supported ? (
@@ -194,13 +168,7 @@ type Stage = {
   timestamp?: Date | null;
 };
 
-function LifecycleBar({
-  settlement,
-  disputedRecoups,
-}: {
-  settlement: Settlement;
-  disputedRecoups: number;
-}) {
+function LifecycleBar({ settlement }: { settlement: Settlement }) {
   if (settlement.status === "voided") {
     return (
       <div className="rounded-lg border border-ink-200/80 bg-white px-5 py-4 flex items-center gap-3">
@@ -283,20 +251,13 @@ function LifecycleBar({
             Settlement lifecycle
           </div>
           {isDisputed && (
-            <div className="flex items-center gap-1.5 text-[11px] font-medium text-rose-700">
-              <AlertTriangle className="h-3 w-3" />
+            <span className="text-[11px] text-ink-500">
               {settlement.status === "disputed"
                 ? "In dispute"
                 : settlement.status === "revised"
                   ? "Revision sent"
-                  : "Resolved after dispute"}
-              {disputedRecoups > 0 && (
-                <span className="text-rose-600">
-                  · {disputedRecoups} disputed recoup
-                  {disputedRecoups === 1 ? "" : "s"}
-                </span>
-              )}
-            </div>
+                  : "Previously disputed"}
+            </span>
           )}
         </div>
 
@@ -314,9 +275,13 @@ function LifecycleBar({
                 return "bg-brand-700 ring-brand-700 text-white";
               }
               if (isCurrent) {
-                return isDisputed
-                  ? "bg-rose-50 ring-rose-500 text-rose-700"
-                  : "bg-brand-50 ring-brand-700 text-brand-700";
+                if (settlement.status === "disputed") {
+                  return "bg-rose-50/70 ring-rose-300 text-rose-700";
+                }
+                if (settlement.status === "revised" || isDisputed) {
+                  return "bg-amber-50 ring-amber-300 text-amber-800";
+                }
+                return "bg-brand-50 ring-brand-700 text-brand-700";
               }
               return "bg-white ring-ink-200/80 text-ink-300";
             })();
